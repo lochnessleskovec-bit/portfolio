@@ -282,8 +282,15 @@ tfoot td{font-weight:700}
       <canvas id="chart-big" style="max-height:380px"></canvas>
     </div>
     <div class="chart-card" style="margin-bottom:0">
-      <div class="chart-title">Měsíční výnosy</div>
-      <div class="chart-sub">Výnos bez vlivu vkladů a prodejů (metoda Modified Dietz). „v Kč“ zahrnuje pohyb kurzu, „v USD“ ne. Dividendy nejsou započteny.</div>
+      <div class="add-bar" style="margin-bottom:6px">
+        <div class="chart-title">Výnosy</div>
+        <div class="seg" id="ret-seg">
+          <button class="currency-btn active" onclick="setReturnsView('monthly')">Měsíční</button>
+          <button class="currency-btn" onclick="setReturnsView('yearly')">Roční</button>
+          <button class="currency-btn" onclick="setReturnsView('average')">Průměrný</button>
+        </div>
+      </div>
+      <div class="chart-sub">Výnos bez vlivu nákupů a prodejů (metoda Modified Dietz, měsíce řetězené do let). „v Kč“ zahrnuje pohyb kurzu, „v USD“ ne. Dividendy nejsou započteny.</div>
       <div id="monthly-table" class="small muted">-</div>
     </div>
   </div>
@@ -1117,7 +1124,8 @@ function renderCharts() {
 }
 
 // Modified Dietz monthly returns (flows = purchases − sale proceeds in the month)
-function renderMonthly(H) {
+let returnsView = "monthly", lastHistory = null;
+function computeMonthly(H) {
   const monthEnd = {};
   H.dates.forEach((d, i) => { monthEnd[d.slice(0, 7)] = i; });
   const months = Object.keys(monthEnd).sort();
@@ -1127,18 +1135,73 @@ function renderMonthly(H) {
     a.usd += l.costUSD; a.czk += l.costCZK;
     if (l.to) { const b = flows[l.to.slice(0, 7)] = flows[l.to.slice(0, 7)] || { usd: 0, czk: 0 }; b.usd -= l.proceedsUSD; b.czk -= l.proceedsCZK; }
   });
-  const mn = ["", "Leden", "Únor", "Březen", "Duben", "Květen", "Červen", "Červenec", "Srpen", "Září", "Říjen", "Listopad", "Prosinec"];
-  const rows = [];
+  const out = [];
   for (let k = 1; k < months.length; k++) {
     const i0 = monthEnd[months[k - 1]], i1 = monthEnd[months[k]], F = flows[months[k]] || { usd: 0, czk: 0 };
     const r = (v0, v1, f) => (v0 + f / 2) > 1 ? (v1 - v0 - f) / (v0 + f / 2) * 100 : null;
-    const rU = r(H.valUSD[i0], H.valUSD[i1], F.usd), rC = r(H.valCZK[i0], H.valCZK[i1], F.czk);
-    const gC = H.valCZK[i1] - H.valCZK[i0] - F.czk;
-    const [y, m] = months[k].split("-");
-    const cell = v => v == null ? "—" : `<span style="color:${clr(v)};font-weight:700">${sgn(v)}${fmt(v, 2)} %</span>`;
-    rows.push(`<tr><td style="color:#f1f5f9;font-weight:600">${mn[+m]} ${y}</td><td>${cell(rU)}</td><td>${cell(rC)}</td><td>${signedCzk(gC)}</td><td class="muted">${F.czk ? `${sgn(F.czk)}${fmt(F.czk, 0)} Kč` : "—"}</td></tr>`);
+    out.push({ ym: months[k], rU: r(H.valUSD[i0], H.valUSD[i1], F.usd), rC: r(H.valCZK[i0], H.valCZK[i1], F.czk),
+               gC: H.valCZK[i1] - H.valCZK[i0] - F.czk, fC: F.czk });
   }
-  $("monthly-table").innerHTML = rows.length ? `<div class="table-wrap" style="margin:0"><table><thead><tr><th>Měsíc</th><th>Výnos v USD</th><th>Výnos v Kč</th><th>Zisk v Kč</th><th>Nákupy − prodeje</th></tr></thead><tbody>${rows.reverse().join("")}</tbody></table></div>` : '<div class="empty">Zatím méně než dva měsíce dat.</div>';
+  return out;
+}
+const chain = rs => { const v = rs.filter(r => r != null); return v.length ? (v.reduce((p, r) => p * (1 + r / 100), 1) - 1) * 100 : null; };
+const pctCell = v => v == null ? "—" : `<span style="color:${clr(v)};font-weight:700">${sgn(v)}${fmt(v, 2)} %</span>`;
+
+function setReturnsView(v) {
+  returnsView = v;
+  document.querySelectorAll("#ret-seg button").forEach(b => b.classList.toggle("active", b.getAttribute("onclick").includes(`'${v}'`)));
+  if (lastHistory) renderMonthly(lastHistory);
+}
+
+function renderMonthly(H) {
+  lastHistory = H;
+  const M = computeMonthly(H);
+  const el = $("monthly-table");
+  if (!M.length) { el.innerHTML = '<div class="empty">Zatím méně než dva měsíce dat.</div>'; return; }
+  const wrap = (head, rows) => `<div class="table-wrap" style="margin:0"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
+
+  if (returnsView === "monthly") {
+    const mn = ["", "Leden", "Únor", "Březen", "Duben", "Květen", "Červen", "Červenec", "Srpen", "Září", "Říjen", "Listopad", "Prosinec"];
+    el.innerHTML = wrap("<th>Měsíc</th><th>Výnos v USD</th><th>Výnos v Kč</th><th>Zisk v Kč</th><th>Nákupy − prodeje</th>",
+      [...M].reverse().map(m => { const [y, mo] = m.ym.split("-");
+        return `<tr><td style="color:#f1f5f9;font-weight:600">${mn[+mo]} ${y}</td><td>${pctCell(m.rU)}</td><td>${pctCell(m.rC)}</td><td>${signedCzk(m.gC)}</td><td class="muted">${m.fC ? `${sgn(m.fC)}${czkFmt(m.fC)}` : "—"}</td></tr>`; }).join(""));
+    return;
+  }
+
+  const years = {};
+  M.forEach(m => { (years[m.ym.slice(0, 4)] = years[m.ym.slice(0, 4)] || []).push(m); });
+  if (returnsView === "yearly") {
+    el.innerHTML = wrap("<th>Rok</th><th>Výnos v USD</th><th>Výnos v Kč</th><th>Zisk v Kč</th><th>Nákupy − prodeje</th><th>Měsíců</th>",
+      Object.keys(years).sort().reverse().map(y => { const ms = years[y];
+        const partial = ms.length < 12 ? ' <span class="pill pill-dim">část roku</span>' : "";
+        return `<tr><td style="color:#f1f5f9;font-weight:600">${y}${partial}</td><td>${pctCell(chain(ms.map(m => m.rU)))}</td><td>${pctCell(chain(ms.map(m => m.rC)))}</td>
+          <td>${signedCzk(ms.reduce((a, m) => a + m.gC, 0))}</td><td class="muted">${czkFmt(ms.reduce((a, m) => a + m.fC, 0))}</td><td class="muted">${ms.length}</td></tr>`; }).join(""));
+    return;
+  }
+
+  // Average
+  const stats = key => {
+    const v = M.map(m => m[key]).filter(r => r != null);
+    if (!v.length) return null;
+    const total = chain(v), n = v.length;
+    const geoM = (Math.pow(1 + total / 100, 1 / n) - 1) * 100;
+    const fullYears = Object.values(years).filter(ms => ms.length === 12).map(ms => chain(ms.map(m => m[key]))).filter(x => x != null);
+    return { n, arith: v.reduce((a, b) => a + b, 0) / n, geoM, annual: (Math.pow(1 + total / 100, 12 / n) - 1) * 100, total,
+             avgYear: fullYears.length ? fullYears.reduce((a, b) => a + b, 0) / fullYears.length : null, fullYears: fullYears.length,
+             best: Math.max(...v), worst: Math.min(...v), pos: v.filter(x => x > 0).length / n * 100 };
+  };
+  const U = stats("rU"), C = stats("rC");
+  const row = (label, f, hint = "") => `<tr><td style="color:#f1f5f9;font-weight:600">${label}${hint ? `<div class="small muted" style="font-weight:400">${hint}</div>` : ""}</td><td>${f(U)}</td><td>${f(C)}</td></tr>`;
+  const p = k => s => s ? pctCell(s[k]) : "—";
+  el.innerHTML = wrap("<th></th><th>v USD</th><th>v Kč</th>",
+    row("Průměrný roční výnos (p.a.)", p("annual"), `přepočteno z celého období (${U?.n ?? 0} měsíců)`) +
+    row("Průměr celých kalendářních let", p("avgYear"), `${U?.fullYears ?? 0} celých let`) +
+    row("Průměrný měsíční výnos", p("geoM"), "geometrický průměr") +
+    row("Aritmetický průměr měsíců", p("arith")) +
+    row("Výnos za celé období", p("total")) +
+    row("Nejlepší měsíc", p("best")) +
+    row("Nejhorší měsíc", p("worst")) +
+    row("Ziskových měsíců", s => s ? `${fmt(s.pos, 0)} %` : "—"));
 }
 
 // ================================================================
