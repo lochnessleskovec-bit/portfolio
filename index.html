@@ -1473,7 +1473,7 @@ function afterImport(msg) {
 // ================================================================
 // XTB (.xlsx): open positions, closed positions, dividends
 // ================================================================
-const excelDate = v => typeof v === "number" ? new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10) : String(v).slice(0, 10);
+const excelDate = v => typeof v === "number" ? new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10) : v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10);
 const xtbTicker = t => t.endsWith(".US") ? t.slice(0, -3) : t;
 function xtbCur(t) {
   const s = t.split(".").pop();
@@ -1492,16 +1492,17 @@ async function handleXTBfile(file) {
   try {
     const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
     const accCur = (file.name.match(/^(CZK|EUR|USD|PLN)_/) || [])[1] || "CZK";
-    const open = [], closed = [], divMap = {};
+    const open = [], closed = [], divMap = {}, skipped = {};
+    const isSecurity = (r, c, fallback = "STOCK") => { const cat = (String(r[c("category")] ?? "").trim() || fallback).toUpperCase(); if (["STOCK", "ETF"].includes(cat)) return true; skipped[cat] = (skipped[cat] || 0) + 1; return false; };
     for (const sn of wb.SheetNames) {
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: null });
       const op = findTable(rows, ["Ticker", "Volume", "Current price", "Open price", "Open time (UTC)"]);
       if (op) {
-        const c = n => op.col(n); let name = "";
+        const c = n => op.col(n); let name = "", groupCat = "STOCK";
         for (let i = op.start; i < rows.length; i++) {
           const r = rows[i]; if (!r || !r[c("ticker")]) continue;
-          if (!r[c("type")]) { name = String(r[c("instrument/position")] ?? ""); continue; }
-          if (String(r[c("type")]).toUpperCase() !== "BUY") continue;
+          if (!r[c("type")]) { name = String(r[c("instrument/position")] ?? ""); groupCat = String(r[c("category")] ?? "").trim() || "STOCK"; continue; }
+          if (String(r[c("type")]).toUpperCase() !== "BUY" || !isSecurity(r, c, groupCat)) continue;
           const xt = String(r[c("ticker")]);
           open.push({ id: String(r[c("instrument/position")]), xt, name, shares: +r[c("volume")], price: +r[c("open price")], cur: xtbCur(xt), date: excelDate(r[c("open time (utc)")]), last: +r[c("current price")] || null });
         }
@@ -1510,7 +1511,7 @@ async function handleXTBfile(file) {
       if (cp) {
         const c = n => cp.col(n);
         for (let i = cp.start; i < rows.length; i++) {
-          const r = rows[i]; if (!r || !r[c("ticker")] || String(r[c("type")]).toUpperCase() !== "BUY") continue;
+          const r = rows[i]; if (!r || !r[c("ticker")] || String(r[c("type")]).toUpperCase() !== "BUY" || !isSecurity(r, c)) continue;
           const xt = String(r[c("ticker")]);
           closed.push({ id: `${r[c("position id")]}|${r[c("close time (utc)")]}|${r[c("volume")]}`, xt, name: String(r[c("instrument")] ?? xt), shares: +r[c("volume")],
             open: +r[c("open price")], close: +r[c("close price")], openDate: excelDate(r[c("open time (utc)")]), closeDate: excelDate(r[c("close time (utc)")]),
@@ -1533,10 +1534,13 @@ async function handleXTBfile(file) {
     const divs = Object.values(divMap).filter(d => d.gross > 0);
     if (!open.length && !closed.length && !divs.length) { st.textContent = "⚠ V souboru nejsou pozice ani dividendy – je to export z XTB?"; return; }
     pendingImport = { open, closed, divs, accCur };
+    const lastSell = closed.map(c => c.closeDate).sort().pop();
+    const skippedTxt = Object.entries(skipped).map(([k, v]) => `${v}× ${k}`).join(", ");
     const tickers = [...new Set(open.map(o => xtbTicker(o.xt)))];
     showImportPreview(`<div class="small muted" style="font-weight:700;margin-bottom:8px">XTB EXPORT</div>
       <div style="font-size:13px;line-height:1.8"><strong>${open.length}</strong> otevřených nákupů v <strong>${tickers.length}</strong> tickerech<br>
-      <strong>${closed.length}</strong> uzavřených obchodů (prodeje s daty nákupu pro časový test)<br><strong>${divs.length}</strong> dividend</div>
+      <strong>${closed.length}</strong> prodejů akcií${lastSell ? ` (poslední ${lastSell})` : ""}<br><strong>${divs.length}</strong> dividend</div>
+      ${skippedTxt ? `<div class="small muted" style="margin-top:6px">Přeskočeno (nejsou to akcie ani ETF): ${esc(skippedTxt)}</div>` : ""}
       <div style="margin:10px 0;display:flex;flex-wrap:wrap;gap:5px">${tickers.map(t => `<span class="ticker-badge">${esc(t)}</span>`).join("")}</div>
       ${importOptionsHtml("xtb")}<div class="form-actions"><button class="btn-save" onclick="applyXTB()">Importovat</button><button class="btn-cancel" onclick="closeImportModal()">Zrušit</button></div>`);
     st.textContent = "✓ Export načten";
