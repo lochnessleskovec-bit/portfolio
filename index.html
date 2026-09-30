@@ -85,6 +85,11 @@ tbody tr:nth-child(even){background:#0a0e1a}
 td{padding:10px 12px;font-size:12px;white-space:nowrap;vertical-align:middle}
 tfoot tr{border-top:2px solid #334155;background:#1e293b}
 tfoot td{font-weight:700}
+.main thead th:not(:empty),.modal thead th:not(:empty){cursor:pointer;user-select:none}
+.main thead th:not(:empty):hover,.modal thead th:not(:empty):hover{color:#c7d2fe}
+th[data-sort]{color:#a5b4fc}
+th[data-sort="asc"]::after{content:" ▲";font-size:9px}
+th[data-sort="desc"]::after{content:" ▼";font-size:9px}
 .ticker-badge{background:linear-gradient(135deg,#6366f1,#8b5cf6);border-radius:6px;padding:2px 7px;font-size:11px;font-weight:700;display:inline-block}
 .btn-icon{background:none;border:none;cursor:pointer;color:#475569;font-size:14px;padding:2px 4px;border-radius:4px}
 .btn-icon:hover{color:#ef4444}
@@ -1315,8 +1320,8 @@ function renderDividends() {
     });
     $("div-tbody").innerHTML = Object.values(g).sort((a, b) => b.net - a.net).map(x => `<tr>
       <td><span class="ticker-badge">${esc(x.t)}</span></td><td>${x.n}</td><td class="small muted">${x.first}</td><td class="small muted">${x.last}</td>
-      <td>${czkFmt(x.gross)}</td><td class="muted">${x.wht ? "−" + czkFmt(x.wht) : "—"}</td><td class="green">+$${fmt(x.usd)}</td>
-      <td style="font-weight:700" class="green">+${czkFmt(x.net)}</td><td class="muted">${x.n12 ? "+" + czkFmt(x.n12) : "—"}</td>
+      <td>${czkFmt(x.gross)}</td><td class="muted">${x.wht ? "−" + czkFmt(x.wht) : "—"}</td><td style="color:${clr(x.usd)}">${sgn(x.usd)}$${fmt(x.usd)}</td>
+      <td style="font-weight:700;color:${clr(x.net)}">${sgn(x.net)}${czkFmt(x.net)}</td><td class="muted">${x.n12 ? sgn(x.n12) + czkFmt(x.n12) : "—"}</td>
       <td><button class="btn-icon" onclick="setDivView('detail')" title="Detail">⋯</button></td></tr>`).join("") || '<tr><td colspan="10" class="empty">Zatím žádné dividendy.</td></tr>';
   } else {
     $("div-thead").innerHTML = "<th>Ticker</th><th>Datum</th><th>Hrubě</th><th>Sražená daň</th><th>Čistě ($)</th><th>Kurz</th><th>Čistě (Kč)</th><th>Zdroj</th><th></th>";
@@ -1324,8 +1329,8 @@ function renderDividends() {
       const net = d.grossOrig - (d.whtOrig || 0);
       return `<tr><td><span class="ticker-badge">${esc(d.ticker)}</span></td><td class="muted">${d.date}</td>
       <td>${fmt(d.grossOrig)} ${d.cur}</td><td class="muted">${d.whtOrig ? "−" + fmt(d.whtOrig) + " " + d.cur : "—"}</td>
-      <td class="green">+$${fmt(u)}</td><td class="small" style="color:#a78bfa">${net && d.cur !== "CZK" ? fmt(c.net / net, 4) : "—"}</td>
-      <td class="green" style="font-weight:700">+${czkFmt(c.net)}</td><td class="small muted">${esc(d.source || "ručně")}</td>
+      <td style="color:${clr(u)}">${sgn(u)}$${fmt(u)}</td><td class="small" style="color:#a78bfa">${net && d.cur !== "CZK" ? fmt(c.net / net, 4) : "—"}</td>
+      <td style="font-weight:700;color:${clr(c.net)}">${sgn(c.net)}${czkFmt(c.net)}</td><td class="small muted">${esc(d.source || "ručně")}</td>
       <td><button class="btn-icon" onclick="deleteDividend(${d.id})" title="Smazat">✕</button></td></tr>`;
     }).join("") || '<tr><td colspan="9" class="empty">Zatím žádné dividendy.</td></tr>';
   }
@@ -1843,6 +1848,72 @@ async function handleScreenshot(file) {
     $("form-status").textContent = "Předvyplněno ze screenshotu – zkontroluj a potvrď.";
   } catch { st.textContent = "⚠ Rozpoznání screenshotu funguje jen při spuštění uvnitř Claude.ai. Tady použij export z brokera."; }
 }
+
+// ================================================================
+// TABLE SORTING – click any column header (1st click ascending, 2nd descending)
+// Works for every table, keeps the order when data re-render, remembered per table.
+// ================================================================
+let sortState = {};
+try { sortState = JSON.parse(store.getItem("pt_sort") || "{}"); } catch {}
+const MONTHS_CZ = ["leden", "únor", "březen", "duben", "květen", "červen", "červenec", "srpen", "září", "říjen", "listopad", "prosinec"];
+function parseCell(raw) {
+  const text = raw.replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ").trim();
+  if (!text || /^[—\-?]$/.test(text)) return null;
+  let m = text.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (m) return { t: 1, v: m[1] };
+  m = text.match(/^([^\s\d]+) (\d{4})$/);
+  if (m && MONTHS_CZ.includes(m[1].toLowerCase())) return { t: 1, v: `${m[2]}-${String(MONTHS_CZ.indexOf(m[1].toLowerCase()) + 1).padStart(2, "0")}` };
+  m = text.match(/^([+\-−]?)\s?([$€]?)\s?([+\-−]?)(\d{1,3}(?: \d{3})+|\d+)(,\d+)?/);
+  if (m && !/^[A-Za-zÀ-ž]/.test(text.slice(m[0].length))) {
+    const neg = [m[1], m[3]].some(s => s === "-" || s === "−");
+    return { t: 0, v: (neg ? -1 : 1) * parseFloat(m[4].replace(/ /g, "") + (m[5] || "").replace(",", ".")) };
+  }
+  return { t: 2, v: text.toLowerCase() };
+}
+function cmpCells(a, b, dir) {
+  if (a == null || b == null) return a == null && b == null ? 0 : a == null ? 1 : -1;   // empty always last
+  if (a.t !== b.t) return (a.t - b.t) * dir;
+  return (a.t === 0 ? a.v - b.v : a.v.localeCompare(b.v, "cs")) * dir;
+}
+const tableKey = t => t.tBodies[0]?.id || t.closest("[id]")?.id || "";
+const thLabel = th => th.textContent.trim();
+function applySort(table) {
+  const head = table.tHead?.rows[0], tb = table.tBodies[0];
+  if (!head || !tb) return;
+  const st = sortState[tableKey(table)];
+  const cells = [...head.cells];
+  const col = st ? cells.findIndex(th => thLabel(th) === st.col) : -1;
+  cells.forEach((th, i) => {
+    const want = i === col ? (st.dir > 0 ? "asc" : "desc") : null;
+    if ((th.dataset.sort || null) !== want) { if (want) th.dataset.sort = want; else delete th.dataset.sort; }
+  });
+  if (col < 0) return;
+  const rows = [...tb.rows];
+  if (rows.length < 2 || rows.some(r => r.cells.length === 1)) return;   // empty-state row
+  const sorted = rows.map((r, i) => ({ r, i, v: parseCell(r.cells[col]?.textContent || "") }))
+    .sort((a, b) => cmpCells(a.v, b.v, st.dir) || a.i - b.i);
+  if (sorted.every((x, k) => x.r === rows[k])) return;                   // already in order -> no DOM change
+  sorted.forEach(x => tb.appendChild(x.r));
+}
+document.addEventListener("click", e => {
+  const th = e.target.closest("thead th");
+  if (!th || !th.closest(".main, .modal") || !thLabel(th)) return;
+  const table = th.closest("table"), key = tableKey(table), label = thLabel(th);
+  const cur = sortState[key];
+  sortState[key] = cur && cur.col === label ? { col: label, dir: -cur.dir } : { col: label, dir: 1 };
+  store.setItem("pt_sort", JSON.stringify(sortState));
+  applySort(table);
+});
+new MutationObserver(muts => {
+  const tables = new Set();
+  muts.forEach(m => {
+    const el = m.target.nodeType === 1 ? m.target : m.target.parentElement;
+    if (!el) return;
+    const t = el.closest("table"); if (t) tables.add(t);
+    el.querySelectorAll?.("table").forEach(x => tables.add(x));
+  });
+  tables.forEach(applySort);
+}).observe(document.body, { childList: true, subtree: true });
 
 // ================================================================
 // INIT
