@@ -1,0 +1,48 @@
+name: Denní data trhu
+
+on:
+  schedule:
+    - cron: "0 18 * * 1-5"   # po–pá 18:00 UTC = během obchodních hodin v USA (léto i zima)
+  workflow_dispatch:          # ruční spuštění (tlačítko v aplikaci nebo záložka Actions)
+
+permissions:
+  contents: write             # jen kvůli keepalive commitu
+
+concurrency:
+  group: market-data
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalace knihoven
+        run: pip install --quiet yfinance requests
+
+      - name: Stáhnout ceny a kurzy do Gistu
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+        run: python fetch_market.py
+
+      # GitHub vypne plánované úlohy ve veřejném repozitáři po 60 dnech bez commitu.
+      # Tenhle krok udělá malý commit, když poslední je starší než 45 dní.
+      - name: Keepalive
+        run: |
+          last=$(git log -1 --format=%ct)
+          now=$(date +%s)
+          if [ $(( (now - last) / 86400 )) -ge 45 ]; then
+            date -u +%F > .github/keepalive
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/keepalive
+            git commit -m "keepalive"
+            git push
+          fi
