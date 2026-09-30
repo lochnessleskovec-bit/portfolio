@@ -1201,7 +1201,8 @@ function computeMonthly(H) {
     const c0 = czkPerUsd(H.dates[i0]), c1 = czkPerUsd(H.dates[i1]);
     out.push({ ym: months[k], rU: r(H.valUSD[i0], H.valUSD[i1], F.usd), rC: r(H.valCZK[i0], H.valCZK[i1], F.czk),
                gC: H.valCZK[i1] - H.valCZK[i0] - F.czk, fC: F.czk,
-               bU: b0 && b1 ? (b1 / b0 - 1) * 100 : null, bC: b0 && b1 && c0 && c1 ? (b1 * c1 / (b0 * c0) - 1) * 100 : null });
+               bU: b0 && b1 ? (b1 / b0 - 1) * 100 : null, bC: b0 && b1 && c0 && c1 ? (b1 * c1 / (b0 * c0) - 1) * 100 : null,
+               bG: H.benchVal?.[i0] != null && H.benchVal?.[i1] != null && c0 && c1 ? H.benchVal[i1] * c1 - H.benchVal[i0] * c0 - F.czk : null });
   }
   return out;
 }
@@ -1221,25 +1222,29 @@ function renderMonthly(H) {
   if (!M.length) { el.innerHTML = '<div class="empty">Zatím méně než dva měsíce dat.</div>'; return; }
   const wrap = (head, rows) => `<div class="table-wrap" style="margin:0"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
   const hasB = !!(benchmark && H.benchPx), bl = BENCH_LABELS[benchmark];
-  const bHead = hasB ? `<th style="color:#fbbf24">${bl} v USD</th><th style="color:#fbbf24">${bl} v Kč</th>` : "";
-  const bCells = (u, c) => hasB ? `<td>${pctCell(u)}</td><td>${pctCell(c)}</td>` : "";
+  const bHead = hasB ? `<th style="color:#fbbf24">${bl} v USD</th><th style="color:#fbbf24">${bl} v Kč</th>` : "";   // average view (percent)
+  const bMoneyHead = hasB ? `<th style="color:#fbbf24">${bl} výnos v Kč</th><th style="color:#fbbf24">${bl} zisk v Kč</th><th>Rozdíl vs. ${bl}</th>` : "";
+  const bMoney = (pctC, pctU, gain, myGain) => !hasB ? "" :
+    `<td>${pctCell(pctC)}${pctU != null ? `<div class="small muted">v USD ${sgn(pctU)}${fmt(pctU, 2)} %</div>` : ""}</td>
+     <td>${gain == null ? "—" : signedCzk(gain)}</td><td>${gain == null ? "—" : signedCzk(myGain - gain)}</td>`;
 
   if (returnsView === "monthly") {
     const mn = ["", "Leden", "Únor", "Březen", "Duben", "Květen", "Červen", "Červenec", "Srpen", "Září", "Říjen", "Listopad", "Prosinec"];
-    el.innerHTML = wrap(`<th>Měsíc</th><th>Výnos v USD</th><th>Výnos v Kč</th>${bHead}<th>Zisk v Kč</th><th>Nákupy − prodeje</th>`,
+    el.innerHTML = wrap(`<th>Měsíc</th><th>Výnos v USD</th><th>Výnos v Kč</th><th>Zisk v Kč</th>${bMoneyHead}<th>Nákupy − prodeje</th>`,
       [...M].reverse().map(m => { const [y, mo] = m.ym.split("-");
-        return `<tr><td style="color:#f1f5f9;font-weight:600">${mn[+mo]} ${y}</td><td>${pctCell(m.rU)}</td><td>${pctCell(m.rC)}</td>${bCells(m.bU, m.bC)}<td>${signedCzk(m.gC)}</td><td class="muted">${m.fC ? `${sgn(m.fC)}${czkFmt(m.fC)}` : "—"}</td></tr>`; }).join(""));
+        return `<tr><td style="color:#f1f5f9;font-weight:600">${mn[+mo]} ${y}</td><td>${pctCell(m.rU)}</td><td>${pctCell(m.rC)}</td><td>${signedCzk(m.gC)}</td>${bMoney(m.bC, m.bU, m.bG, m.gC)}<td class="muted">${m.fC ? `${sgn(m.fC)}${czkFmt(m.fC)}` : "—"}</td></tr>`; }).join(""));
     return;
   }
 
   const years = {};
   M.forEach(m => { (years[m.ym.slice(0, 4)] = years[m.ym.slice(0, 4)] || []).push(m); });
   if (returnsView === "yearly") {
-    el.innerHTML = wrap(`<th>Rok</th><th>Výnos v USD</th><th>Výnos v Kč</th>${bHead}<th>Zisk v Kč</th><th>Nákupy − prodeje</th><th>Měsíců</th>`,
+    el.innerHTML = wrap(`<th>Rok</th><th>Výnos v USD</th><th>Výnos v Kč</th><th>Zisk v Kč</th>${bMoneyHead}<th>Nákupy − prodeje</th><th>Měsíců</th>`,
       Object.keys(years).sort().reverse().map(y => { const ms = years[y];
         const partial = ms.length < 12 ? ' <span class="pill pill-dim">část roku</span>' : "";
-        return `<tr><td style="color:#f1f5f9;font-weight:600">${y}${partial}</td><td>${pctCell(chain(ms.map(m => m.rU)))}</td><td>${pctCell(chain(ms.map(m => m.rC)))}</td>${bCells(chain(ms.map(m => m.bU)), chain(ms.map(m => m.bC)))}
-          <td>${signedCzk(ms.reduce((a, m) => a + m.gC, 0))}</td><td class="muted">${czkFmt(ms.reduce((a, m) => a + m.fC, 0))}</td><td class="muted">${ms.length}</td></tr>`; }).join(""));
+        return `<tr><td style="color:#f1f5f9;font-weight:600">${y}${partial}</td><td>${pctCell(chain(ms.map(m => m.rU)))}</td><td>${pctCell(chain(ms.map(m => m.rC)))}</td>
+          <td>${signedCzk(ms.reduce((a, m) => a + m.gC, 0))}</td>${(() => { const g = ms.filter(m => m.bG != null);
+            return bMoney(chain(ms.map(m => m.bC)), chain(ms.map(m => m.bU)), g.length ? g.reduce((a, m) => a + m.bG, 0) : null, g.reduce((a, m) => a + m.gC, 0)); })()}<td class="muted">${czkFmt(ms.reduce((a, m) => a + m.fC, 0))}</td><td class="muted">${ms.length}</td></tr>`; }).join(""));
     return;
   }
 
@@ -1263,6 +1268,8 @@ function renderMonthly(H) {
     row("Průměrný měsíční výnos", p("geoM"), "geometrický průměr") +
     row("Aritmetický průměr měsíců", p("arith")) +
     row("Výnos za celé období", p("total")) +
+    (hasB ? (() => { const g = M.filter(m => m.bG != null), my = g.reduce((a, m) => a + m.gC, 0), ix = g.reduce((a, m) => a + m.bG, 0);
+      return `<tr><td style="color:#f1f5f9;font-weight:600">Zisk za celé období v Kč<div class="small muted" style="font-weight:400">rozdíl vs. ${bl}: ${sgn(my - ix)}${czkFmt(my - ix)}</div></td><td colspan="2">${signedCzk(my)}</td><td colspan="2">${signedCzk(ix)}</td></tr>`; })() : "") +
     row("Nejlepší měsíc", p("best")) +
     row("Nejhorší měsíc", p("worst")) +
     row("Ziskových měsíců", s => s ? `${fmt(s.pos, 0)} %` : "—"));
@@ -2044,7 +2051,12 @@ function sealedBox(message, publicKeyB64) {
 }
 
 async function ghJSON(path, opts = {}) {
-  const r = await gh(path, opts);
+  let r;
+  for (let attempt = 1; ; attempt++) {           // GitHub sometimes answers 5xx for a moment – retry
+    r = await gh(path, opts);
+    if (r.status < 500 || attempt >= 4) break;
+    await new Promise(res => setTimeout(res, 2000 * attempt));
+  }
   const text = await r.text();
   let j = null; try { j = text ? JSON.parse(text) : null; } catch {}
   if (!r.ok) { const e = new Error(`${r.status}: ${j?.message || text.slice(0, 120)}`); e.status = r.status; throw e; }
@@ -2079,6 +2091,7 @@ async function autoSetup() {
   $("setup-log").innerHTML = "";
   settings.token = token;
   store.setItem("pt_settings", JSON.stringify(settings));
+  let step = "Přihlášení";
   try {
     // 1) account + token scopes
     const r0 = await gh("/user");
@@ -2091,6 +2104,7 @@ async function autoSetup() {
     }
     setupLog(`✓ Přihlášen jako <strong>${esc(user.login)}</strong>`);
 
+    step = "Repozitář";
     // 2) repository
     const repo = `${user.login}/${name}`;
     let info;
@@ -2103,6 +2117,7 @@ async function autoSetup() {
     }
     const branch = info.default_branch || "main";
 
+    step = "Nahrání souborů";
     // 3) files
     const files = { "index.html": utf8B64(SELF_HTML), ...EMBEDDED_FILES };
     for (const [path, b64] of Object.entries(files)) {
@@ -2110,6 +2125,7 @@ async function autoSetup() {
       setupLog(`✓ ${esc(path)} – ${res}`);
     }
 
+    step = "Gist s daty";
     // 4) Gist with portfolio data
     if (!settings.gistId) settings.gistId = await findGist();
     if (settings.gistId) await loadRemote();
@@ -2117,11 +2133,20 @@ async function autoSetup() {
     if (!settings.gistId) throw new Error("Gist se nepodařilo vytvořit");
     setupLog(`✓ Gist s daty: ${esc(settings.gistId)}`);
 
-    // 5) secrets for the Action
-    await setRepoSecret(repo, "GIST_TOKEN", token);
-    await setRepoSecret(repo, "GIST_ID", settings.gistId);
-    setupLog("✓ Secrets GIST_TOKEN a GIST_ID uloženy (zašifrované)");
+    step = "Ukládání secrets";
+    // 5) secrets for the Action (skipped when nothing changed since the last setup)
+    const secretSig = `${repo}|${settings.gistId}|${token.slice(-6)}`;
+    let secretsThere = false;
+    try { await ghJSON(`/repos/${repo}/actions/secrets/GIST_ID`); await ghJSON(`/repos/${repo}/actions/secrets/GIST_TOKEN`); secretsThere = true; } catch (e) { if (e.status !== 404) throw e; }
+    if (secretsThere && settings.secretSig === secretSig) setupLog("✓ Secrets už jsou nastavené (beze změny)");
+    else {
+      await setRepoSecret(repo, "GIST_TOKEN", token);
+      await setRepoSecret(repo, "GIST_ID", settings.gistId);
+      settings.secretSig = secretSig; store.setItem("pt_settings", JSON.stringify(settings));
+      setupLog("✓ Secrets GIST_TOKEN a GIST_ID uloženy (zašifrované)");
+    }
 
+    step = "GitHub Pages";
     // 6) GitHub Pages
     try { await ghJSON(`/repos/${repo}/pages`); setupLog("✓ GitHub Pages už běží"); }
     catch (e) {
@@ -2139,7 +2164,8 @@ async function autoSetup() {
     closeSettings();
     await triggerUpdate(true);
   } catch (e) {
-    setupLog("✗ " + esc(e.message), "red");
+    setupLog(`✗ ${esc(step)}: ${esc(e.message)}`, "red");
+    if (e.status >= 500) setupLog("Porucha na straně GitHubu. Kroky nad touto chybou proběhly – zkus to za pár minut znovu, hotové části se přeskočí.", "muted");
     if (e.status === 403 || e.status === 404) setupLog("Nejčastější příčina: token nemá oprávnění repo, workflow a gist.", "muted");
   } finally { btn.disabled = false; }
 }
