@@ -465,6 +465,11 @@ tfoot td{font-weight:700}
       <div class="form-actions"><button class="btn-save" onclick="saveMapping()">Uložit symboly</button></div>
     </div>
     <div class="setting-block">
+      <h3>Data podle brokera</h3>
+      <div class="small muted" style="margin-bottom:8px;line-height:1.6">Když už u brokera nic nemáš a nechceš nahrávat další exporty, jeho data tu smažeš. Novým importem se vždy nahradí jen data daného brokera.</div>
+      <div id="source-list"></div>
+    </div>
+    <div class="setting-block">
       <h3>Záloha</h3>
       <div class="form-actions" style="margin-top:0">
         <button class="btn-cancel" onclick="exportBackup()">Stáhnout zálohu (JSON)</button>
@@ -676,7 +681,20 @@ function applyPortfolio(p) {
   t212Raw = p.t212Raw || {};
   yahooMap = p.yahooMap || {};
   t212SplitSig = p.t212SplitSig || "";
+  cleanLegacy();
   histCache = null;
+}
+// Older app versions stored XTB data without `source`. If a newer XTB import exists, the old copies are duplicates.
+let legacyRemoved = 0;
+function cleanLegacy() {
+  const legacy = x => !x.source && (x.xtbId || /^XTB/.test(x.note || ""));
+  const before = buys.length + dividends.length;
+  if (buys.some(b => b.source === "xtb") || dividends.some(d => d.source === "xtb")) {
+    buys = buys.filter(b => !legacy(b)); dividends = dividends.filter(d => !legacy(d));
+  } else {
+    buys.forEach(b => { if (legacy(b)) b.source = "xtb"; }); dividends.forEach(d => { if (legacy(d)) d.source = "xtb"; });
+  }
+  legacyRemoved += before - buys.length - dividends.length;
 }
 const portfolioPayload = () => ({ version: 2, buys, sells, dividends, t212Raw, yahooMap, t212SplitSig });
 
@@ -840,7 +858,7 @@ function openSettings() {
   $("set-status").textContent = "";
   $("setup-token").value = settings.token || "";
   if (settings.repo) $("setup-repo").value = settings.repo.split("/")[1] || "portfolio";
-  renderMapping();
+  renderMapping(); renderSources();
   $("settings-modal").style.display = "flex";
 }
 function closeSettings() { $("settings-modal").style.display = "none"; }
@@ -879,6 +897,25 @@ function saveMapping() {
   save();
   $("set-status").textContent = "✓ Symboly uloženy – klikni na ☁️ Stáhnout ceny.";
 }
+const SOURCE_NAMES = { xtb: "XTB", t212: "Trading 212", manual: "Ručně zadané" };
+const srcOf = x => x.source === "ručně" || !x.source ? "manual" : x.source;
+function renderSources() {
+  const rows = ["xtb", "t212", "manual"].map(src => {
+    const b = buys.filter(x => srcOf(x) === src), s = sells.filter(x => srcOf(x) === src), d = dividends.filter(x => srcOf(x) === src);
+    if (!b.length && !s.length && !d.length) return "";
+    const dates = [...b.map(x => x.buyDate), ...s.map(x => x.date), ...d.map(x => x.date)].sort();
+    return `<tr><td style="font-weight:700">${SOURCE_NAMES[src]}</td><td>${b.length}</td><td>${s.length}</td><td>${d.length}</td>
+      <td class="small muted">${dates[0]} – ${dates[dates.length - 1]}</td><td><button class="btn-cancel" style="padding:4px 10px" onclick="deleteSource('${src}')">Smazat</button></td></tr>`;
+  }).join("");
+  $("source-list").innerHTML = rows ? `<div class="table-wrap" style="margin:0"><table><thead><tr><th>Zdroj</th><th>Nákupy</th><th>Prodeje</th><th>Dividendy</th><th>Období</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="small muted">Žádná data.</div>';
+}
+function deleteSource(src) {
+  if (!confirm(`Smazat všechny nákupy, prodeje a dividendy ze zdroje „${SOURCE_NAMES[src]}“? Nejde to vrátit (kromě zálohy).`)) return;
+  buys = buys.filter(x => srcOf(x) !== src); sells = sells.filter(x => srcOf(x) !== src); dividends = dividends.filter(x => srcOf(x) !== src);
+  if (src === "t212") { t212Raw = {}; t212SplitSig = ""; }
+  save(); renderSources(); renderMapping(); renderEverything();
+}
+
 function exportBackup() {
   const blob = new Blob([JSON.stringify(portfolioPayload(), null, 2)], { type: "application/json" });
   const a = document.createElement("a");
@@ -1549,9 +1586,10 @@ async function handleXTBfile(file) {
 function applyXTB() {
   const { open, closed, divs, accCur } = pendingImport;
   const withDivs = $("xtb-divs").checked, clearManual = $("xtb-manual").checked;
-  buys = buys.filter(b => b.source !== "xtb" && !(clearManual && (!b.source || b.source === "manual")));
-  sells = sells.filter(s => s.source !== "xtb");
-  if (withDivs) dividends = dividends.filter(d => d.source !== "xtb");
+  const isXtb = x => x.source === "xtb" || (!x.source && (x.xtbId || /^XTB/.test(x.note || "")));
+  buys = buys.filter(b => !isXtb(b) && !(clearManual && (!b.source || b.source === "manual")));
+  sells = sells.filter(s => !isXtb(s));
+  if (withDivs) dividends = dividends.filter(d => !isXtb(d));
   let id = Date.now();
   open.forEach(o => buys.push(normBuy({ id: id++, source: "xtb", xtbId: o.id, ticker: xtbTicker(o.xt), yahoo: guessYahoo(xtbTicker(o.xt)), company: o.name || o.xt,
     shares: o.shares, buyPrice: +toUSD(o.price, o.cur, o.date).toFixed(4), buyPriceOrig: o.price, buyCurrencyOrig: o.cur, buyDate: o.date,
@@ -1750,6 +1788,7 @@ async function reloadAll() {
   const btn = $("btn-refresh"), ico = $("refresh-icon");
   btn.disabled = true; ico.classList.add("spinning");
   await Promise.all([loadRemote(), fetchLiveFx()]);
+  if (legacyRemoved) { save(); legacyRemoved = 0; }
   maybeRecomputeT212();
   renderEverything();
   btn.disabled = false; ico.classList.remove("spinning");
