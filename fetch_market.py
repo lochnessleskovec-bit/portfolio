@@ -32,6 +32,8 @@ XTB_TO_YAHOO = {"NL": "AS", "DE": "DE", "UK": "L", "FR": "PA", "IT": "MI", "ES":
                 "PT": "LS", "FI": "HE", "CH": "SW", "PL": "WA", "CZ": "PR", "DK": "CO", "SE": "ST",
                 "NO": "OL", "AT": "VI"}
 TODAY = dt.date.today()
+# Benchmarks (ETFs tracking the index, price only – same basis as the portfolio returns)
+BENCHMARKS = {"SP500": "SPY", "MSCIWORLD": "URTH"}
 
 
 def log(*a):
@@ -215,6 +217,8 @@ def main():
     log(f"{len(tickers)} tickerů, historie od {start}")
 
     prices, splits, missing = fetch_prices(tickers)
+    log("Benchmarky:")
+    bench, _, _ = fetch_prices({k: (sym, start.isoformat()) for k, sym in BENCHMARKS.items()})
     ecb = fetch_ecb(start - dt.timedelta(days=10), market.get("ecb"))
     cnb = fetch_cnb(start - dt.timedelta(days=10), market.get("cnb"))
 
@@ -227,6 +231,7 @@ def main():
         "prices": prices,
         "splits": splits,
         "missing": missing,
+        "benchmarks": bench,
         "ecb": ecb,
         "cnb": cnb,
         "snapshots": [snaps[k] for k in sorted(snaps)],
