@@ -485,6 +485,15 @@ th[data-sort="desc"]::after{content:" ▼";font-size:9px}
       <div class="form-actions"><button class="btn-save" onclick="saveMapping()">Uložit symboly</button></div>
     </div>
     <div class="setting-block">
+      <h3>Aktualizace aplikace</h3>
+      <div class="small muted" id="upd-info" style="margin-bottom:8px;line-height:1.6"></div>
+      <div class="form-actions" style="margin-top:0">
+        <button class="btn-cancel" id="upd-check" onclick="checkUpdate(false)">Zkontrolovat aktualizace</button>
+        <button class="btn-save" id="upd-apply" style="display:none" onclick="applyUpdate()">Aktualizovat</button>
+        <span id="upd-status" class="small muted"></span>
+      </div>
+    </div>
+    <div class="setting-block">
       <h3>Data podle brokera</h3>
       <div class="small muted" style="margin-bottom:8px;line-height:1.6">Když už u brokera nic nemáš a nechceš nahrávat další exporty, jeho data tu smažeš. Novým importem se vždy nahradí jen data daného brokera.</div>
       <div id="source-list"></div>
@@ -502,6 +511,8 @@ th[data-sort="desc"]::after{content:" ▼";font-size:9px}
 
 <script>
 "use strict";
+const APP_VERSION = "2026-10-01 07:06";
+const UPSTREAM_REPO = "lochnessleskovec-bit/portfolio"; // source of updates for copies of the app
 // Copy of this very page – the setup wizard uploads it to your repository as index.html
 const SELF_HTML = "<!DOCTYPE html>\n" + document.documentElement.outerHTML;
 // Other files of the app (base64) – uploaded to the repository by the setup wizard
@@ -880,7 +891,8 @@ function openSettings() {
   $("set-status").textContent = "";
   $("setup-token").value = settings.token || "";
   if (settings.repo) $("setup-repo").value = settings.repo.split("/")[1] || "portfolio";
-  renderMapping(); renderSources();
+  renderMapping(); renderSources(); renderUpdateInfo();
+  $("upd-apply").style.display = updateAvailable ? "" : "none";
   $("settings-modal").style.display = "flex";
 }
 function closeSettings() { $("settings-modal").style.display = "none"; }
@@ -1916,6 +1928,58 @@ async function handleScreenshot(file) {
 }
 
 // ================================================================
+// UPDATES – copies of the app check the source repository for a newer version
+// ================================================================
+const APP_FILES = ["index.html", "manifest.webmanifest", "sw.js", "icon-192.png", "icon-512.png", "fetch_market.py", "README.md", ".github/workflows/daily.yml"];
+const isSourceCopy = () => !settings.repo || settings.repo.toLowerCase() === UPSTREAM_REPO.toLowerCase();
+let updateAvailable = null;
+function renderUpdateInfo() {
+  $("upd-info").innerHTML = `Verze aplikace: <strong style="color:#f1f5f9">${APP_VERSION}</strong><br>` + (isSourceCopy()
+    ? "Tohle je zdrojová verze – ostatní kopie aplikace se aktualizují z tohoto repozitáře."
+    : `Aktualizace se stahují z <strong style="color:#f1f5f9">${UPSTREAM_REPO}</strong> do tvého repozitáře ${esc(settings.repo)}. Tvoje data se nemění.`);
+  $("upd-check").style.display = isSourceCopy() ? "none" : "";
+}
+async function checkUpdate(silent) {
+  if (isSourceCopy() || !settings.token) { if (!silent) $("upd-status").textContent = settings.token ? "" : "Nejdřív připoj GitHub."; return; }
+  if (silent) {                                    // automatic check at most once a day
+    const last = store.getItem("pt_upd_check");
+    if (last && Date.now() - +last < 86400000) { if (store.getItem("pt_upd_avail") > APP_VERSION) showUpdateBanner(store.getItem("pt_upd_avail")); return; }
+  }
+  if (!silent) $("upd-status").textContent = "⟳ Kontroluji...";
+  try {
+    const f = await ghJSON(`/repos/${UPSTREAM_REPO}/contents/index.html`);
+    const remote = new TextDecoder().decode(b64ToBytes(f.content.replace(/\s/g, "")));
+    const v = (remote.match(/(?:const|let|var) APP_VERSION = "([^"]+)"/) || [])[1];
+    store.setItem("pt_upd_check", String(Date.now()));
+    if (v && v > APP_VERSION) {
+      updateAvailable = v; store.setItem("pt_upd_avail", v);
+      showUpdateBanner(v);
+      if (!silent) { $("upd-status").textContent = `Je k dispozici nová verze ${v}.`; $("upd-apply").style.display = ""; }
+    } else if (!silent) $("upd-status").textContent = "✓ Máš nejnovější verzi.";
+  } catch (e) { if (!silent) $("upd-status").textContent = "⚠ Kontrola selhala: " + e.message; }
+}
+function showUpdateBanner(v) {
+  $("market-label").innerHTML = `<button class="btn-icon-hdr" style="padding:2px 8px;font-size:11px;border-color:#6366f1;color:#c7d2fe" onclick="openSettings();checkUpdate(false)">⬆ Nová verze aplikace ${esc(v)}</button>`;
+}
+async function applyUpdate() {
+  const st = $("upd-status"), btn = $("upd-apply");
+  btn.disabled = true;
+  try {
+    const branch = settings.branch || "main";
+    for (const path of APP_FILES) {
+      st.textContent = `⟳ ${path}...`;
+      const f = await ghJSON(`/repos/${UPSTREAM_REPO}/contents/${path}`);
+      await putRepoFile(settings.repo, branch, path, f.content.replace(/\s/g, ""));
+    }
+    store.setItem("pt_upd_avail", "");
+    st.textContent = "✓ Aktualizováno. GitHub novou verzi zveřejní do 1–2 minut, pak aplikaci zavři a znovu otevři.";
+    btn.style.display = "none";
+  } catch (e) {
+    st.textContent = "⚠ Aktualizace selhala: " + e.message + (e.status === 403 || e.status === 404 ? " (token potřebuje oprávnění repo a workflow)" : "");
+  } finally { btn.disabled = false; }
+}
+
+// ================================================================
 // TABLE SORTING – click any column header (1st click ascending, 2nd descending)
 // Works for every table, keeps the order when data re-render, remembered per table.
 // ================================================================
@@ -2002,6 +2066,7 @@ async function reloadAll() {
   await reloadAll();
   if (!settings.token) syncStatus("error", "Offline – klikni na ⚙️ a připoj GitHub");
   if (!store.persistent) syncStatus("error", "Prohlížeč tu neumožňuje ukládat data – nastav GitHub v ⚙️, jinak se po zavření ztratí");
+  checkUpdate(true);
   if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 })();
 
