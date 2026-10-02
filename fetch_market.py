@@ -85,7 +85,7 @@ def collect_tickers(port):
     return out
 
 
-def fetch_prices(tickers):
+def fetch_prices(tickers, total_return=False):
     prices, splits, missing = {}, {}, {}
     for t, (sym, start) in sorted(tickers.items()):
         try:
@@ -105,6 +105,8 @@ def fetch_prices(tickers):
             px = [[idx.strftime("%Y-%m-%d"), round(float(c) / div, 4)]
                   for idx, c in hist["Close"].dropna().items()]
             prices[t] = {"yahoo": sym, "cur": cur, "px": px}
+            if total_return and "Adj Close" in hist:   # dividends reinvested – for a fair comparison incl. dividends
+                prices[t]["tr"] = [[idx.strftime("%Y-%m-%d"), round(float(c) / div, 4)] for idx, c in hist["Adj Close"].dropna().items()]
             if "Stock Splits" in hist:
                 sp = [[idx.strftime("%Y-%m-%d"), float(r)] for idx, r in hist["Stock Splits"].items() if r and r > 0]
                 if sp:
@@ -218,7 +220,7 @@ def main():
 
     prices, splits, missing = fetch_prices(tickers)
     log("Benchmarky:")
-    bench, _, _ = fetch_prices({k: (sym, start.isoformat()) for k, sym in BENCHMARKS.items()})
+    bench, _, _ = fetch_prices({k: (sym, start.isoformat()) for k, sym in BENCHMARKS.items()}, total_return=True)
     ecb = fetch_ecb(start - dt.timedelta(days=10), market.get("ecb"))
     cnb = fetch_cnb(start - dt.timedelta(days=10), market.get("cnb"))
 
