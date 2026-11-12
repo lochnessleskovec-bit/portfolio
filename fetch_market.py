@@ -179,29 +179,6 @@ def fetch_cnb(start, old):
     return out
 
 
-def rate_on(series, day, cur):
-    keys = sorted(k for k in series if k <= day)
-    return series[keys[-1]].get(cur) if keys else None
-
-
-def snapshot(port, prices, ecb):
-    """Today's value of open positions – stored as a daily record."""
-    val_usd, cost_czk = 0.0, 0.0
-    day = TODAY.isoformat()
-    for b in port.get("buys", []):
-        p = prices.get(b.get("ticker"))
-        if p and p["px"]:
-            close, cur = p["px"][-1][1], p["cur"]
-            px_usd = close if cur == "USD" else close / (rate_on(ecb, day, cur) or 1)
-        else:
-            px_usd = b.get("buyPrice") or 0
-        val_usd += (b.get("shares") or 0) * px_usd
-        cost_czk += (b.get("shares") or 0) * (b.get("buyPrice") or 0) * (b.get("buyForex") or 0)
-    czk = rate_on(ecb, day, "CZK") or 0
-    return {"date": day, "valueUSD": round(val_usd, 2), "valueCZK": round(val_usd * czk, 2),
-            "costCZK": round(cost_czk, 2)}
-
-
 def main():
     r = requests.get(API, headers=HDR, timeout=30)
     if r.status_code == 404:
@@ -224,10 +201,6 @@ def main():
     ecb = fetch_ecb(start - dt.timedelta(days=10), market.get("ecb"))
     cnb = fetch_cnb(start - dt.timedelta(days=10), market.get("cnb"))
 
-    snaps = {s["date"]: s for s in market.get("snapshots", [])}
-    snap = snapshot(port, prices, ecb)
-    snaps[snap["date"]] = snap
-
     market = {
         "updated": dt.datetime.now(dt.timezone.utc).isoformat(timespec="minutes"),
         "prices": prices,
@@ -236,11 +209,10 @@ def main():
         "benchmarks": bench,
         "ecb": ecb,
         "cnb": cnb,
-        "snapshots": [snaps[k] for k in sorted(snaps)],
     }
     body = {"files": {MARKET_FILE: {"content": json.dumps(market, separators=(",", ":"))}}}
     requests.patch(API, headers=HDR, json=body, timeout=120).raise_for_status()
-    log(f"Uloženo: {len(prices)} tickerů, {len(missing)} bez dat, snímek {snap}")
+    log(f"Uloženo: {len(prices)} tickerů, {len(missing)} bez dat")
 
 
 if __name__ == "__main__":
