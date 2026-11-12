@@ -567,7 +567,7 @@ th[data-sort="desc"]::after{content:" ▼";font-size:9px}
 </div>
 <script>
 "use strict";
-const APP_VERSION = "2026-11-11 18:30";
+const APP_VERSION = "2026-11-12 19:02";
 const UPSTREAM_REPO = "lochnessleskovec-bit/portfolio"; // source of updates for copies of the app
 const SELF_HTML = "<!DOCTYPE html>\n" + document.documentElement.outerHTML;
 const EMBEDDED_FILES = {
@@ -2510,7 +2510,15 @@ async function autoSetup() {
     const branch = info.default_branch || "main";
 
     step = "Nahrání souborů";
-    // 3) files
+    // 3) files – never silently replace a newer app in the repository with an older file from disk
+    try {
+      const cur = await ghJSON(`/repos/${repo}/contents/index.html?ref=${branch}`);
+      const live = (new TextDecoder().decode(b64ToBytes((cur.content || "").replace(/\s/g, ""))).match(/(?:const|let|var) APP_VERSION = "([^"]+)"/) || [])[1];
+      if (live && live > APP_VERSION) {
+        const go = await ask(`V repozitáři je NOVĚJŠÍ verze aplikace (${live}) než tento soubor (${APP_VERSION}).\n\nNejspíš jsi otevřel starší stažený soubor. Opravdu ji nahradit starší verzí?`, { ok: "Nahrát starší verzi", cancel: "Zrušit", danger: true });
+        if (!go) throw new Error(`Zrušeno – tento soubor je starší (${APP_VERSION}) než verze na GitHubu (${live}). Otevři nejnovější stažený index.html.`);
+      } else setupLog(`Verze tohoto souboru: ${APP_VERSION}${live ? ` · na GitHubu dosud: ${live}` : ""}`, "muted");
+    } catch (e) { if (e.status !== 404) throw e; }
     const files = { "index.html": utf8B64(SELF_HTML), ...EMBEDDED_FILES };
     for (const [path, b64] of Object.entries(files)) {
       const res = await putRepoFile(repo, branch, path, b64);
